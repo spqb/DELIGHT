@@ -5,9 +5,9 @@ import numpy as np
 import pandas as pd
 from transformers import AutoTokenizer
 from peft import LoraConfig, get_peft_model, TaskType
-from train.dataloaders.my_dataloader import PairDataset, PairwiseInputCollator
+from train.dataloaders.dataloader import PairDataset, PairwiseInputCollator
 from train.models.contrastive import ContrastiveLM
-from train.my_trainer import Trainer
+from train.trainer import Trainer
 from train.utils.contrastive_utils import compute_embeddings
 import warnings
 from Bio import SeqIO
@@ -22,6 +22,9 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--train", type=str, required=True, help="Train dataset path.")
     parser.add_argument("--query", type=str, default=None, help="Dataset with the sequences to be annotated. Can be a fasta file or a .csv file.")
     parser.add_argument("--output", type=str, default=None, help="Output directory where to save the model's parameters.")
+    parser.add_argument("--column_sequences", type=str, default="sequence", help="Column name in the input .csv file containing the sequences.")
+    parser.add_argument("--column_labels", type=str, default="label", help="Column name in the input .csv file containing the labels.")
+    parser.add_argument("--column_headers", type=str, default="header", help="Column name in the input .csv file containing the sequence identifiers.")
     parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint to load the model from.")
     parser.add_argument("--flag", type=str, default="embedding", help="Flag to add to the embedding file name.")
     parser.add_argument("--zero-shot", action="store_true", help="Embed query file without fine-tuning the model.")
@@ -65,7 +68,7 @@ def main(config):
         
     device = torch.device("cuda" if torch.cuda.is_available() else ValueError("No GPU available"))
     print("Loading dataset...")
-    train_dataset = PairDataset(config["train"])
+    train_dataset = PairDataset(config["train"], column_sequences=config["column_sequences"], column_labels=config["column_labels"])
     print(f"Constructed {len(train_dataset)} positive pairs from the input dataset")
     tokenizer = AutoTokenizer.from_pretrained(config["model"], do_lower_case=False)
     
@@ -119,9 +122,10 @@ def main(config):
             assert os.path.exists(config["train"]), f"Training dataset {config['train']} does not exist."
             print("Embedding the training dataset...")
             df = pd.read_csv(config["train"])
-            seq_train = df["sequence"].values
-            y_train = df["label"].values
-            headers_train = df["header"].values
+            assert config["column_sequences"] in df.columns and config["column_labels"] in df.columns and config["column_headers"] in df.columns, "The input .csv file must contain {} and {} columns.".format(config["column_sequences"], config["column_labels"])
+            seq_train = df[config["column_sequences"]].values
+            y_train = df[config["column_labels"]].values
+            headers_train = df[config["column_headers"]].values
             if spaced_tokens:
                 seq_train = list(map(lambda x: " ".join(x), seq_train))
             X_train = compute_embeddings(
@@ -148,10 +152,10 @@ def main(config):
             try:
                 df = pd.read_csv(config["query"])
             except ValueError:
-                raise ValueError("The query dataset must be a .csv file with 'label' and 'sequence' columns.")
-            assert "label" in df.columns and "sequence" in df.columns, "The input .csv file must contain 'label' and 'sequence' columns."
-            seq_query = df["sequence"].values
-            headers_query = df["header"].values
+                raise ValueError("The query dataset must be a .csv file with {}, {} and {} columns.".format(config["column_labels"], config["column_sequences"], config["column_headers"]))
+            assert config["column_labels"] in df.columns and config["column_sequences"] in df.columns and config["column_headers"] in df.columns, "The input .csv file must contain {} and {} columns.".format(config["column_labels"], config["column_sequences"])
+            seq_query = df[config["column_sequences"]].values
+            headers_query = df[config["column_headers"]].values
         if spaced_tokens:
             seq_query = list(map(lambda x: " ".join(x), seq_query))
             
@@ -183,8 +187,17 @@ def main(config):
                 headers=headers_query,
                 probs=y_prob,
             )
+            # create a DataFrame with the predicted labels and save it
+            df_query = pd.DataFrame({
+                "header": headers_query,
+                "sequence": seq_query,
+                "predicted_label": y_pred,
+            })
+            df_query.to_csv(os.path.splitext(fname_query)[0] + "_predicted_labels.csv", index=False)
+            print("Query dataset's embedding and predicted labels saved to {}".format(fname_query))
             print(f"Query dataset's embedding and predicted labels saved to {fname_query}")
         else:
+            print("Saving the query dataset's embedding...")
             np.savez_compressed(
                 fname_query,
                 embeddings=X_test,

@@ -1,13 +1,33 @@
 import torch
 from torch.utils.data import Dataset
-import csv
+import pandas as pd
+import numpy as np
+
+def create_sequnce_pairing(fname: str, column_sequences: str = "sequence", column_labels: str = "label"):
+    def create_pairs(X):
+        pairs = []
+        for i in range(len(X)):
+            for j in range(i+1, len(X)):
+                pairs.append((X[i], X[j]))
+        return pairs
+
+    df = pd.read_csv(fname)
+    assert column_labels in df.columns and column_sequences in df.columns, "The input .csv file must contain 'label' and 'sequence' columns."
+    labels, sequences = df[column_labels].to_numpy(), df[column_sequences].to_numpy()
+    unique_labels = np.unique(labels)
+    pairs_list = []
+    for i, label in enumerate(unique_labels):
+        ids = np.where(labels == label)[0]
+        filtered_sequences = sequences[ids].tolist()
+        pairs = create_pairs(filtered_sequences)
+        pairs_list.extend(pairs)
+        
+    return pairs_list
 
 
 class PairDataset(Dataset):
-    def __init__(self, fname: str):
-        delimiter = ","
-        with open(fname) as csvfile:
-            data = list(csv.reader(csvfile, delimiter=delimiter))
+    def __init__(self, fname: str, column_sequences: str = "sequence", column_labels: str = "label"):
+        data = create_sequnce_pairing(fname, column_sequences=column_sequences, column_labels=column_labels)
         self.seq1 = [d[0] for d in data] 
         self.seq2 = [d[1] for d in data]
         assert len(self.seq1) == len(self.seq2)

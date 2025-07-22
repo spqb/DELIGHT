@@ -1,21 +1,27 @@
 # DELIGHT
 
 > [!WARNING]
-> This repository is still under development. We will publish the code soon!
+> This repository is under active development. A revised version of the code will be released soon!
 
-DELIGHT (Data-Enritched Label-Informed Generation of Homologous sequences using Transformers) is a convoluted acronym that attempts to condense the content of the paper _"Data augmentation enables label-specific generation of homologous protein sequences"_.
+**DELIGHT** (Data-Enriched Label-Informed Generation of Homologous sequences using Transformers) is a slightly convoluted acronym that condenses the content of the paper:  
+_"Data augmentation enables label-specific generation of homologous protein sequences"_.
 
-This repository contains the code for reproducing the pipeline described in the paper and the jupyter notebooks that allow to generate the figures.
+This repository provides:
+- The code to reproduce the full pipeline described in the paper.
+- Jupyter notebooks to regenerate the figures used in the publication.
+
+---
 
 ## ⬇️ Installation
-To be able to use the code, you need to install some dependencies. In particular, you need
 
-- The [transformes](https://huggingface.co/docs/transformers/installation) library by 🤗 HuggingFace
-- Some utilities from the package [adabmDCA](https://github.com/spqb/adabmDCApy.git)
-- The general purpose [rbms](https://github.com/DsysDML/rbms.git) package for training the encoding RBM
-- The package [annaDCA](https://github.com/rossetl/annaDCA.git) for the label-assisted RBM generative model
+To use this code, you’ll need to install several dependencies:
 
-We recommand creating a [conda](https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html) environment with `python >= 3.11` and installing the dependencies inside it:
+- [`transformers`](https://huggingface.co/docs/transformers/installation) by 🤗 HuggingFace  
+- Utilities from [`adabmDCA`](https://github.com/spqb/adabmDCApy.git)  
+- The general-purpose [`rbms`](https://github.com/DsysDML/rbms.git) package for training RBMs  
+- Our custom [`annaDCA`](https://github.com/rossetl/annaDCA.git) package for label-informed RBM generation  
+
+We recommend using a [conda](https://docs.conda.io/projects/conda/en/latest/user-guide/tasks/manage-environments.html) environment with Python ≥ 3.11:
 
 ```bash
 conda create -n delight python=3.12
@@ -23,35 +29,145 @@ conda activate delight
 python -m pip install -r requirements.txt
 ```
 
-## 💾 Data availability
-The data required for reproducing the paper's experiments can be found in the [Zenodo repository](https://zenodo.org/records/15979182).
+---
 
-## 🔁 Reproducing the results
-First off, create the directory `experiments` and download the datasets from the Zenodo repository. You also need to create the repository `models` that will be used to store the parameters of the trained models:
+## 🌞 Quickstart
+
+### 📊 Input Data Format
+
+The pipeline requires two input files:
+- A **training file** with annotated sequences
+- A **query file** with sequences to be annotated
+
+**Training file** (CSV format) must include:
+- `header`: sequence identifiers  
+- `sequence`: full-length sequences  
+- `sequence_align`: aligned versions of the sequences  
+- `label`: functional or structural annotations  
+
+> Custom column names can be provided via CLI arguments.
+
+**Query file** can be either:
+- A FASTA file  
+- A CSV with at least `header` and `sequence` columns
+
+---
+
+### 🔎 Embedding & Annotation Prediction
+
+To embed the query sequences using a protein Language Model (pLM) and predict their annotations, run:
+
+```bash
+python3 ./src/pLM_encoding.py \
+    --train <training_file> \
+    --query <query_file> \
+    --flag <flag_name> \
+    --zero-shot \
+    --bf16
+```
+
+- `<flag_name>` is a string added to output files for traceability.
+- `--zero-shot` uses the foundation model without fine-tuning.
+
+To see all available options:
+
+```bash
+python3 ./src/pLM_encoding.py -h
+```
+
+#### ⚙️ Optional CLI Arguments
+- `--column_headers`: defaults to `header`
+- `--column_sequences`: defaults to `sequence`
+- `--column_labels`: defaults to `label`
+
+#### 📤 Output
+- `.npz` file with train embeddings  
+- `.npz` file with query embeddings, predicted labels, and confidence scores  
+- `.csv` file with query sequences and predicted labels  
+
+---
+
+### 🧠 Training an Annotation-Assisted RBM
+
+Once predictions are available, you can train a label-aware RBM model:
+
+```bash
+annadca train \
+    -d <data_file.csv> \
+    -o <output_dir> \
+    --column_names <column_headers> \
+    --column_sequences <column_sequences_align> \
+    --column_labels <column_labels> \
+    --nepochs 30000 \
+    --nchains 5000
+```
+
+- `data_file.csv` is the output from the previous embedding step.
+- The model will be saved in `<output_dir>`.
+
+> [!NOTE]  
+> `<column_sequences_align>` **must contain aligned sequences**. Full-length sequences are not accepted.
+
+> [!NOTE]  
+> For better performance, we recommend **merging the CSV** file containing predicted labels with the original training file used in `pLM_encoding.py`.
+
+---
+
+### 🎯 Conditional Sequence Generation
+
+To generate new sequences based on specific annotations using the trained RBM model, refer to:  
+`./notebooks/Conditioned_generation.ipynb`
+
+---
+
+## 🔁 Reproducing the Paper Results
+
+To replicate the results from the paper:
+
+1. Create the necessary directories and download the datasets:
 
 ```bash
 cd DELIGHT
 mkdir experiments && cd experiments
 wget https://zenodo.org/records/15979182/files/datasets.zip
-unzip datasets.zip && rm -f datasets.zip
+unzip datasets.zip && rm datasets.zip
 mkdir models
 ```
 
-### ✳️ Construct the embeddings and infer specificities
-- For each dataset, we are going to create the train and test data embeddings using the __ProtBERT__ pLM. We consider both the zero-shot embedding using the __foundation__ model and also the embedding obtained after fine-tuning ProtBERT on the training data using the __contrastive__ objective.
-- We train an __embedding RBM__ for each dataset.
-- We use the trained RBM to ancode the sequences and we train a logistic regression model on the embedding to infer the specificities on the test set
-- We run a logistic regression model on the one-hot representation of the sequences
+2. Run the script to train the models and compute embeddings:
 
-To start the trainings, embeddings and annotation inference, run:
 ```bash
-chmod +x ./bash/experiments-data_augmentation.sh
-./bash/experiments-data_augmentation.sh
+chmod +x ./bash/reproduce_paper_results.sh
+./bash/reproduce_paper_results.sh
 ```
 
-After the script has finished, you can reproduce the figures of the section _II-B: "data augmentation"_ through the Jupyter Notebook `Classification.ipynb`.
+> [!WARNING]  
+> This step is computationally intensive and may take a while.
 
+---
 
-### 🎲 Label-aware homologous sequences generation
+## 📈 Reproducing the Figures
 
+- **Section II-B (_Data augmentation_)**:  
+  Use `./notebooks/Classification.ipynb`
 
+- **Section II-C (_Label-specific generation_)**:  
+  Use `./notebooks/Conditioned_generation.ipynb` and `./notebooks/False_positives_analysis.ipynb`
+
+- **Additional visualizations**:  
+  Use `./notebooks/Additional_figures.ipynb`
+
+---
+
+## 📚 How to cite this work
+```
+@misc{rosset2025dataaugmentationenableslabelspecific,
+      title={Data augmentation enables label-specific generation of homologous protein sequences}, 
+      author={Lorenzo Rosset and Martin Weigt and Francesco Zamponi},
+      year={2025},
+      eprint={2507.15651},
+      archivePrefix={arXiv},
+      primaryClass={q-bio.QM},
+      url={https://arxiv.org/abs/2507.15651}, 
+}
+```
