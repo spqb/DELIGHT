@@ -131,7 +131,7 @@ cd DELIGHT
 mkdir experiments && cd experiments
 wget https://zenodo.org/records/15979182/files/datasets.zip
 unzip datasets.zip && rm datasets.zip
-mkdir models
+mkdir models && cd ..
 ```
 
 2. Run the script to train the models and compute embeddings:
@@ -159,7 +159,7 @@ chmod +x ./bash/reproduce_paper_results.sh
 
 ---
 
-## 📚 How to cite this work
+## 📚 Citing
 ```
 @misc{rosset2025dataaugmentationenableslabelspecific,
       title={Data augmentation enables label-specific generation of homologous protein sequences}, 

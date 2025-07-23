@@ -1,7 +1,7 @@
 #!/bin/bash
 
 DATASETS=("RR" "SH3" "Globin" "CM")
-NUM_UPDATES=10000
+NUM_UPDATES=100000
 
 for dataset in "${DATASETS[@]}"; do
     if [ "$dataset" == "RR" ]; then
@@ -26,7 +26,7 @@ for dataset in "${DATASETS[@]}"; do
     fi
 
     rbms train \
-        --dataset "$PATH_DATA" \
+        --data "$PATH_DATA" \
         --train_size 1.0 \
         --num_hiddens 1024 \
         --gibbs_steps 10 \

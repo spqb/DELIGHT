@@ -157,12 +157,14 @@ def main(config):
             seq_query = df[config["column_sequences"]].values
             headers_query = df[config["column_headers"]].values
         if spaced_tokens:
-            seq_query = list(map(lambda x: " ".join(x), seq_query))
+            seq_query_pLM = list(map(lambda x: " ".join(x), seq_query))
+        else:
+            seq_query_pLM = seq_query
             
         print("Embedding the query dataset...")
         X_test = compute_embeddings(
             model,
-            seq_query,
+            seq_query_pLM,
             tokenizer,
             batch_size=config["batch_size"],
             max_length=config["max_length"],
@@ -189,9 +191,9 @@ def main(config):
             )
             # create a DataFrame with the predicted labels and save it
             df_query = pd.DataFrame({
-                "header": headers_query,
-                "sequence": seq_query,
-                "predicted_label": y_pred,
+                config["column_headers"]: headers_query,
+                config["column_sequences"]: seq_query,
+                config["column_labels"]: y_pred,
             })
             df_query.to_csv(os.path.splitext(fname_query)[0] + "_predicted_labels.csv", index=False)
             print("Query dataset's embedding and predicted labels saved to {}".format(fname_query))
