@@ -1,8 +1,5 @@
 # DELIGHT
 
-> [!WARNING]
-> This repository is under active development. A revised version of the code will be released soon!
-
 **DELIGHT** (Data-Enriched Label-Informed Generation of Homologous sequences using Transformers) is a slightly convoluted acronym that condenses the content of the paper:  
 _"Data augmentation enables label-specific generation of homologous protein sequences"_.
 
@@ -28,6 +25,18 @@ conda create -n delight python=3.12
 conda activate delight
 python -m pip install -r requirements.txt
 ```
+
+> [!WARNING]
+> Due to a temporary incompatibility between the package `rbms` and `torch==2.6`, you need to follow the following procedure to install `rbms`. First, install the package through the GitHub repository. Move to a base repository and then do
+> ```bash
+> git clone https://github.com/DsysDML/rbms.git
+> cd rbms
+>```
+> Then, open the file `pyproject.toml` and, under the flag `dependencies`, do the change: `"torch>=2.0.0, <=2.5.0"` $\rightarrow$ `"torch>=2.0.0, <=2.6.0"`.
+> After that, you can manually install the package inside the conda environment you just created
+> ```bash
+> python3 -m pip install .
+> ```
 
 ---
 
