@@ -1,5 +1,5 @@
 adabmDCA==0.4.3
-annadca==0.2.0
+annadca==0.2.1
 annotated-types==0.7.0
 asttokens==3.0.0
 biopython==1.85

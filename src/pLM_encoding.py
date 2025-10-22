@@ -19,7 +19,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 def get_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Encodes sequences using a pre-trained language model and optionally fine-tunes it.")
     parser.add_argument("--model", type=str, default="Rostlab/prot_bert", help="Model name.", choices=["Rostlab/prot_bert", "facebook/esm2_t12_35M_UR50D", "facebook/esm2_t6_8M_UR50D"])
-    parser.add_argument("--train", type=str, required=True, help="Train dataset path.")
+    parser.add_argument("--train", type=str, default=None, help="Train dataset path.")
     parser.add_argument("--query", type=str, default=None, help="Dataset with the sequences to be annotated. Can be a fasta file or a .csv file.")
     parser.add_argument("--output", type=str, default=None, help="Output directory where to save the model's parameters.")
     parser.add_argument("--column_sequences", type=str, default="sequence", help="Column name in the input .csv file containing the sequences.")
@@ -63,13 +63,15 @@ def main(config):
     
     if config["checkpoint"] is not None:
         assert os.path.exists(config["checkpoint"]), f"Checkpoint {config['checkpoint']} does not exist."
-        
-    assert os.path.exists(config["train"]), f"Training dataset {config['train']} does not exist."
-        
-    device = torch.device("cuda" if torch.cuda.is_available() else ValueError("No GPU available"))
-    print("Loading dataset...")
-    train_dataset = PairDataset(config["train"], column_sequences=config["column_sequences"], column_labels=config["column_labels"])
-    print(f"Constructed {len(train_dataset)} positive pairs from the input dataset")
+    
+    if config["train"] is not None:
+        assert os.path.exists(config["train"]), f"Training dataset {config['train']} does not exist."
+        print("Loading training dataset...")
+        train_dataset = PairDataset(config["train"], column_sequences=config["column_sequences"], column_labels=config["column_labels"])
+        print(f"Constructed {len(train_dataset)} positive pairs from the input dataset")
+
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    print(f"Using device: {device}")
     tokenizer = AutoTokenizer.from_pretrained(config["model"], do_lower_case=False)
     
     # LoRA configuration
