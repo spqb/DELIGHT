@@ -1,0 +1,223 @@
+import argparse
+import torch
+import os
+import sys
+import numpy as np
+import pandas as pd
+import time
+from transformers import AutoTokenizer
+from peft import LoraConfig, get_peft_model, TaskType
+
+# Add parent directory to path to import train modules
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from train.dataloaders.dataloader import PairDataset, PairwiseInputCollator
+from train.models.contrastive import ContrastiveLM
+from train.trainer import Trainer
+from train.utils.contrastive_utils import compute_embeddings
+import warnings
+from Bio import SeqIO
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+def get_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Encodes sequences using a pre-trained language model and optionally fine-tunes it before encoding the sequences.")
+    parser.add_argument("--model", type=str, default="Rostlab/prot_bert", help="Model name.", choices=["Rostlab/prot_bert", "facebook/esm2_t12_35M_UR50D", "facebook/esm2_t6_8M_UR50D"])
+    parser.add_argument("--train", type=str, default=None, help="Path to the training dataset in .csv format.")
+    parser.add_argument("--query", type=str, default=None, help="Path to the query dataset in .csv or fasta format.")
+    parser.add_argument("--flag", type=str, default="", help="Flag to add to the output files.")
+    parser.add_argument("--folder_params", type=str, default=None, help="Output directory where to save the model's parameters.")
+    parser.add_argument("--column_sequences", type=str, default="sequence", help="Column name in the input .csv file containing the sequences.")
+    parser.add_argument("--column_labels", type=str, default="label", help="Column name in the input .csv file containing the labels.")
+    parser.add_argument("--column_headers", type=str, default="header", help="Column name in the input .csv file containing the sequence identifiers.")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint to load the model from.")
+    parser.add_argument("--zero-shot", action="store_true", help="Embed query file without fine-tuning the model.")
+    parser.add_argument("--batch_size", type=int, default=16, help="Batch size.")
+    parser.add_argument("--epochs", type=int, default=1, help="Maxium number of epochs.")
+    parser.add_argument("--save_steps", type=int, default=50, help="Save the model every N steps.")
+    parser.add_argument("--max_length", type=int, default=256, help="Maximum sequence length.")
+    parser.add_argument("--feat_dim", type=int, default=128, help="Feature dimension for the contrastive heads.")
+    parser.add_argument("--lr", type=float, default=2e-5, help="Learning rate.")
+    parser.add_argument("--weight_decay", type=float, default=0.001, help="Weight decay.")
+    parser.add_argument("--patience", type=int, default=5, help="Patience for early stopping.")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Number of gradient accumulation steps.")
+    parser.add_argument("--lora_rank", type=int, default=8, help="Rank of the decomposition.")
+    parser.add_argument("--lora_alpha", type=int, default=16, help="Scaling factor.")
+    parser.add_argument("--lora_dropout", type=float, default=0.05, help="Dropout probability.")
+    parser.add_argument("--bf16", action="store_true", help="Use bf16 precision.")
+    parser.add_argument("--wandb", action="store_true", help="Use wandb for logging.")
+    
+    return parser
+
+
+def main(config):
+    
+    start_time_total = time.time()
+    
+    if config["zero_shot"] and config["query"] is None:
+        raise ValueError("If --zero-shot is set, --query must be provided. Nothing to embed.")
+    
+    if config["folder_params"] is None and config["checkpoint"] is None and not config["zero_shot"]:
+        raise ValueError("When --zero-shot is not set, one between --folder_params or --checkpoint must be provided.")
+    
+    if config["checkpoint"] is not None and config["folder_params"] is not None:
+        warnings.warn("Both --checkpoint and --folder_params are set. The model will be loaded from the checkpoint and the output directory will be ignored.")
+    
+    if config["folder_params"] is not None:
+        if not os.path.exists(config["folder_params"]):
+            os.makedirs(config["folder_params"])
+    
+    if config["checkpoint"] is not None:
+        assert os.path.exists(config["checkpoint"]), f"Checkpoint {config['checkpoint']} does not exist."
+    
+    if config["train"] is not None:
+        assert os.path.exists(config["train"]), f"Training dataset {config['train']} does not exist."
+        print("Loading training dataset...")
+        train_dataset = PairDataset(config["train"], column_sequences=config["column_sequences"], column_labels=config["column_labels"])
+        print(f"Constructed {len(train_dataset)} positive pairs from the input dataset")
+
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    print(f"Using device: {device}")
+    tokenizer = AutoTokenizer.from_pretrained(config["model"], do_lower_case=False)
+    
+    # LoRA configuration
+    lora_config = LoraConfig(
+        task_type=TaskType.FEATURE_EXTRACTION,
+        inference_mode=False,
+        r=int(config["lora_rank"]),
+        lora_alpha=int(config["lora_alpha"]),
+        lora_dropout=float(config["lora_dropout"]),
+        bias="none",
+        target_modules=["query", "value"],
+    )
+    
+    print("Loading model...")
+    start_time_model = time.time()
+    model = ContrastiveLM(feat_dim=config["feat_dim"], backbone=config["model"])
+    model = model.to(device)
+    spaced_tokens = True if "prot_bert" in config["model"] else False
+    time_model_load = time.time() - start_time_model
+    print(f"Model loaded in {time_model_load:.2f}s")
+    
+    if not config["zero_shot"]:
+        model.backbone = get_peft_model(model.backbone, lora_config)
+        model.backbone.print_trainable_parameters()
+        model.train()
+        collator_fn = PairwiseInputCollator(tokenizer, max_length=int(config["max_length"]), insert_whitespace=spaced_tokens)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=float(config["lr"]), weight_decay=float(config["weight_decay"]))
+    
+        print("Starting training...")
+        start_time_train = time.time()
+        trainer = Trainer(
+            model=model,
+            train_dataset=train_dataset,
+            output_dir=config["folder_params"],
+            optimizer=optimizer,
+            collator_fn=collator_fn,
+            num_train_epochs=int(config["epochs"]),
+            batch_size=int(config["batch_size"]),
+            learning_rate=float(config["lr"]),
+            patience=int(config["patience"]),
+            save_steps=int(config["save_steps"]),
+            gradient_accumulation_steps=int(config["gradient_accumulation_steps"]),
+            bf16=bool(config["bf16"]),
+            wandb=bool(config["wandb"]),
+        )
+        trainer.train()
+        model = trainer.model
+        time_train = time.time() - start_time_train
+        print(f"Training completed in {time_train:.2f}s")
+        
+    
+    if config["query"] is not None:
+        assert os.path.exists(config["query"]), f"Query dataset {config['query']} does not exist."
+        model.eval()
+        
+        if config["train"] is not None:
+            assert os.path.exists(config["train"]), f"Training dataset {config['train']} does not exist."
+            print("Embedding the training dataset...")
+            start_time_embed_train = time.time()
+            df = pd.read_csv(config["train"])
+            assert config["column_sequences"] in df.columns and config["column_labels"] in df.columns and config["column_headers"] in df.columns, "The input .csv file must contain {} and {} columns.".format(config["column_sequences"], config["column_labels"])
+            seq_train = df[config["column_sequences"]].values
+            y_train = df[config["column_labels"]].values
+            headers_train = df[config["column_headers"]].values
+            if spaced_tokens:
+                seq_train = list(map(lambda x: " ".join(x), seq_train))
+            X_train = compute_embeddings(
+                model,
+                seq_train,
+                tokenizer,
+                batch_size=config["batch_size"],
+                max_length=config["max_length"],
+            ).numpy()
+            fname_train = os.path.splitext(config["train"])[0] + ".{}.npz".format(config["flag"])
+            np.savez_compressed(fname_train, embeddings=X_train, labels=y_train, headers=headers_train)
+            time_embed_train = time.time() - start_time_embed_train
+            print(f"Training dataset embedding saved to {fname_train} (Time: {time_embed_train:.2f}s)")
+        
+        print("Loading the query dataset...")
+        # check if the query dataset is a fasta file or a .csv file
+        with open(config["query"], "r") as f:
+            first_line = f.readline()
+        if first_line.startswith(">"):
+            # fasta file
+            records = list(SeqIO.parse(config["query"], "fasta"))
+            seq_query = [str(record.seq) for record in records]
+            headers_query = [record.id for record in records]
+            labels_query = None
+        else: # assuming it's a .csv file
+            try:
+                df = pd.read_csv(config["query"])
+            except ValueError:
+                raise ValueError("The query dataset must be a .csv file with {}, {} and {} columns.".format(config["column_labels"], config["column_sequences"], config["column_headers"]))
+            assert config["column_labels"] in df.columns and config["column_sequences"] in df.columns and config["column_headers"] in df.columns, "The input .csv file must contain {} and {} columns.".format(config["column_labels"], config["column_sequences"])
+            seq_query = df[config["column_sequences"]].values
+            headers_query = df[config["column_headers"]].values
+            labels_query = df[config["column_labels"]].values if config["column_labels"] in df.columns else None
+        if spaced_tokens:
+            seq_query_pLM = list(map(lambda x: " ".join(x), seq_query))
+        else:
+            seq_query_pLM = seq_query
+            
+        print("Embedding the query dataset...")
+        start_time_embed_query = time.time()
+        X_test = compute_embeddings(
+            model,
+            seq_query_pLM,
+            tokenizer,
+            batch_size=config["batch_size"],
+            max_length=config["max_length"],
+        ).numpy()
+        
+        fname_query = os.path.splitext(config["query"])[0] + ".{}.npz".format(config["flag"])
+        if labels_query is not None:
+            np.savez_compressed(fname_query, embeddings=X_test, labels=labels_query, headers=headers_query)
+        else:
+            np.savez_compressed(fname_query, embeddings=X_test, headers=headers_query)
+        time_embed_query = time.time() - start_time_embed_query
+        print(f"Query dataset's embedding saved to {fname_query} (Time: {time_embed_query:.2f}s)")
+    
+    time_total = time.time() - start_time_total
+    
+    print("\n" + "="*60)
+    print("PROCESSING TIME SUMMARY:")
+    print("="*60)
+    print(f"Model loading:        {time_model_load:.2f}s")
+    if not config["zero_shot"]:
+        print(f"Training:             {time_train:.2f}s")
+    if config["train"] is not None and config["query"] is not None:
+        print(f"Train embedding:      {time_embed_train:.2f}s")
+        print(f"Query embedding:      {time_embed_query:.2f}s")
+    elif config["query"] is not None:
+        print(f"Query embedding:      {time_embed_query:.2f}s")
+    print(f"Total time:           {time_total:.2f}s")
+    print("="*60)
+    print("Done!")
+            
+          
+if __name__ == "__main__":
+    parser = get_parser()
+    args = parser.parse_args()
+    config = vars(args)
+    main(config)

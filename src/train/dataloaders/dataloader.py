@@ -12,7 +12,7 @@ def create_sequnce_pairing(fname: str, column_sequences: str = "sequence", colum
         return pairs
 
     df = pd.read_csv(fname)
-    assert column_labels in df.columns and column_sequences in df.columns, "The input .csv file must contain 'label' and 'sequence' columns."
+    assert column_labels in df.columns and column_sequences in df.columns, f"The input .csv file must contain '{column_labels}' and '{column_sequences}' columns."
     labels, sequences = df[column_labels].to_numpy(), df[column_sequences].to_numpy()
     unique_labels = np.unique(labels)
     pairs_list = []

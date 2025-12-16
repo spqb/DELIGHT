@@ -104,7 +104,7 @@ class Trainer:
         train_dataloader = DataLoader(self.train_dataset, batch_size=self.batch_size, collate_fn=self.collator_fn, shuffle=True)
         early_stopping = EarlyStopping(patience=self.patience)
         time_start = time.time()
-        scaler = torch.cuda.amp.GradScaler(enabled=self.bf16)  # Enable mixed precision if bf16 is True
+        scaler = torch.amp.GradScaler(device="cuda", enabled=self.bf16)  # Enable mixed precision if bf16 is True
         num_training_steps = len(train_dataloader) * self.num_train_epochs
         scheduler = get_scheduler(
             name="linear",
@@ -122,7 +122,7 @@ class Trainer:
             for batch in train_dataloader:
                 tot_steps += 1
                 inputs = {k: v.to(self.device) for k, v in batch.items()}
-                with torch.cuda.amp.autocast(enabled=self.bf16):  # Mixed precision context
+                with torch.amp.autocast("cuda", dtype=torch.bfloat16 if self.bf16 else torch.float32, enabled=self.bf16):  # Mixed precision context
                     loss = self.compute_loss(inputs)
                 loss = loss / self.gradient_accumulation_steps
                 loss_accumulated += loss.item()
