@@ -1,5 +1,8 @@
 # DELIGHT
 
+> [!WARNING]
+>  This is an old repository containing the code of an outdated work. To see the the corrected version, please refer to: [homolog-label-generation](https://github.com/spqb/homolog-label-generation.git)
+
 **DELIGHT** (Data-Enriched Label-Informed Generation of Homologous sequences using Transformers) is a slightly convoluted acronym that condenses the content of the paper:  
 _"Data augmentation enables label-specific generation of homologous protein sequences"_.
 
